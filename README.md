@@ -1,4 +1,4 @@
-# 👻 PHANTOM CHAT — Production Full Stack
+# PhantomChat — Full Stack
 
 Real-time ephemeral chat over WebSocket. Private (2-person) and Group (unlimited) rooms that **self-destruct in 24 hours**.
 
