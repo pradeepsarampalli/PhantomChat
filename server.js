@@ -8,7 +8,7 @@ const app    = express();
 const server = http.createServer(app);
 const PORT   = process.env.PORT || 3000;
 
-//CORS / JSON 
+//cors,json
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -16,10 +16,8 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
-//Static frontend 
+//Static files (frontend)
 app.use(express.static(path.join(__dirname, 'public')));
-
-//Health check 
 app.get('/health', (_, res) => res.json({ status: 'ok', rooms: rooms.size, clients: clients.size }));
 
 
@@ -28,12 +26,13 @@ app.get('/api/rooms', (_, res) => {
   res.json(list);
 });
 
-//  IN-MEMORY  storing
+// local storage
 const ROOM_TTL = 24 *60*60*1000; // 24 hours
 
-const rooms   = new Map(); // roomId  → Room
-const clients = new Map(); // w → Clientmeta
+const rooms   = new Map();
+const clients = new Map(); 
 
+//schema for a room
 class Room {
   constructor(id, name, type, creatorId) {
     this.id        = id;
@@ -46,20 +45,16 @@ class Room {
     this.messages  = []; 
     this._timer    = setTimeout(() => this._expire(), ROOM_TTL);
   }
-
   _expire() {
     console.log(`[EXPIRE] ${this.id} — "${this.name}"`);
     broadcastRoom(this.id, { type: 'room_expired', roomId: this.id, name: this.name });
-    // detach all clients from this room
     clients.forEach(m => { if (m.roomId === this.id) m.roomId = null; });
     rooms.delete(this.id);
   }
-
   destroy() {
     clearTimeout(this._timer);
     rooms.delete(this.id);
   }
-
   summary() {
     return {
       id:this.id,
@@ -74,7 +69,7 @@ class Room {
   }
 }
 
-//  HELPERS
+//helpers
 function send(ws, obj) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
@@ -105,7 +100,7 @@ function memberSnapshot(room) {
   return Object.fromEntries(room.members);
 }
 
-//  WEBSOCKET SERVER
+//websockets
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws, req) => {
@@ -142,11 +137,10 @@ wss.on('connection', (ws, req) => {
   ws.on('error', err => console.error('[WS ERROR]', err.message));
 });
 
-//  MESSAGE HANDLER
+// message handler
 function handle(ws, meta, msg) {
   switch (msg.type) {
 
-    // auth
     case 'auth': {
       meta.userId   = (msg.userId   || ('u_' + Math.random().toString(36).substr(2, 8)));
       meta.username = (msg.username || 'anon').replace(/</g,'').replace(/>/g,'').slice(0, 30);
@@ -154,7 +148,7 @@ function handle(ws, meta, msg) {
       break;
     }
 
-    // CREATE ROOM 
+    //creating rom 
     case 'create_room': {
       if (!meta.userId) return send(ws, err('Not authenticated'));
       const roomId = genId();
@@ -167,18 +161,19 @@ function handle(ws, meta, msg) {
       break;
     }
 
-    // ── JOIN ROOM
+    //joining room
     case 'join_room': {
       if (!meta.userId) return send(ws, err('Not authenticated'));
       const roomId = (msg.roomId || '').toUpperCase().trim();
       const room   = rooms.get(roomId);
 
-      if (!room)                   return send(ws, err('Room not found or expired'));
-      if (Date.now() > room.expiresAt) { room.destroy(); return send(ws, err('Room has expired')); }
+      if (!room)return send(ws, err('Room not found or expired'));
+      if (Date.now() > room.expiresAt) { 
+        room.destroy();
+        return send(ws, err('Room has expired')); 
+      }
       if (room.type === 'private' && room.members.size >= 2 && !room.members.has(meta.userId))
       return send(ws, err('Private room is full (max 2 people)'));
-
-      // Leave previous room cleanly
       if (meta.roomId && meta.roomId !== roomId) {
         const prev = rooms.get(meta.roomId);
         if (prev) {
@@ -186,17 +181,14 @@ function handle(ws, meta, msg) {
           broadcastRoom(meta.roomId, { type: 'user_left', userId: meta.userId, username: meta.username, members: memberSnapshot(prev) }, ws);
         }
       }
-
       room.members.set(meta.userId, meta.username);
       meta.roomId = roomId;
       //console.log(`[JOIN] ${meta.username} → ${roomId}`);
-
       send(ws, {
         type:     'room_joined',
         room:     room.summary(),
         messages: room.messages.slice(-100),
       });
-
       broadcastRoom(roomId, {
         type:     'user_joined',
         userId:   meta.userId,
@@ -206,30 +198,27 @@ function handle(ws, meta, msg) {
       break;
     }
 
-    // ─ SEND MESSAGE 
+    //send message 
     case 'send_message': {
       if (!meta.userId || !meta.roomId) return send(ws, err('Not in a room'));
       const room = rooms.get(meta.roomId);
       if (!room) return send(ws, err('Room not found'));
-
       const text = (msg.text || '').trim().slice(0, 2000);
       if (!text) return;
-
       const message = {
-        id:       Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-        userId:   meta.userId,
+        id:Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+        userId:meta.userId,
         username: meta.username,
         text,
-        time:     Date.now(),
+        time:Date.now(),
       };
       room.messages.push(message);
       if (room.messages.length > 500) room.messages.shift();
-
       broadcastRoomAll(room.id, { type: 'new_message', roomId: room.id, message });
       break;
     }
 
-    // ── LEAVE ROOM 
+    //leaving room
     case 'leave_room': {
       if (!meta.roomId) return;
       const room = rooms.get(meta.roomId);
@@ -242,7 +231,7 @@ function handle(ws, meta, msg) {
       break;
     }
 
-    // ── DELETE ROOM 
+    // deleting room
     case 'delete_room': {
       if (!meta.roomId) return;
       const room = rooms.get(meta.roomId);
@@ -257,7 +246,6 @@ function handle(ws, meta, msg) {
       break;
     }
 
-    // PING 
     case 'ping': {
       send(ws, { type: 'pong', time: Date.now() });
       break;
@@ -268,15 +256,15 @@ function handle(ws, meta, msg) {
 function err(message) { 
   return { type: 'error', message }; 
 }
-//  PERIODIC CLEANUP 
+//periodic cleanup
 setInterval(() => {
   const now = Date.now();
   rooms.forEach((room) => { if (now > room.expiresAt) room._expire(); });
 }, 10 * 60 * 1000);
 
-app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('*',(_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-//  START
+//server
 server.listen(PORT, () => {
   console.log(`PhantomChat running → http://localhost:${PORT}`);
   // console.log(`   WebSocket path : ws://localhost:${PORT}/ws`);
